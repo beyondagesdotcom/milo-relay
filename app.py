@@ -1,21 +1,23 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 import requests
+import hashlib
+import base64
 
 app = Flask(__name__)
 RELAY_TOKEN = "RELAY_TOKEN_MK2026"
+WECOM_TOKEN = "XHgrLRTWkt8Dk8Y"
+WECOM_AES_KEY = "n8OiirCsEQ8DqQs9NQ1MnrOV2v7Wk5DO6t1dxD2f9ve"
 
 @app.route("/proxy", methods=["POST"])
 def proxy():
     auth = request.headers.get("Authorization", "")
     if auth != f"Bearer {RELAY_TOKEN}":
         return jsonify({"error": "Unauthorized"}), 401
-    
     data = request.json
     url = data.get("url")
     method = data.get("method", "GET").upper()
     headers = data.get("headers", {})
     body = data.get("body", None)
-
     try:
         resp = requests.request(method, url, headers=headers, json=body, timeout=30)
         try:
@@ -25,6 +27,33 @@ def proxy():
         return jsonify({"status": resp.status_code, "body": resp_body})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/wecom", methods=["GET", "POST"])
+def wecom():
+    if request.method == "GET":
+        msg_signature = request.args.get("msg_signature", "")
+        timestamp = request.args.get("timestamp", "")
+        nonce = request.args.get("nonce", "")
+        echostr = request.args.get("echostr", "")
+        items = sorted([WECOM_TOKEN, timestamp, nonce, echostr])
+        s = hashlib.sha1("".join(items).encode()).hexdigest()
+        if s == msg_signature:
+            try:
+                from Crypto.Cipher import AES
+                aes_key = base64.b64decode(WECOM_AES_KEY + "=")
+                encrypted = base64.b64decode(echostr)
+                cipher = AES.new(aes_key, AES.MODE_CBC, aes_key[:16])
+                decrypted = cipher.decrypt(encrypted)
+                pad = decrypted[-1]
+                decrypted = decrypted[:-pad]
+                msg_len = int.from_bytes(decrypted[16:20], "big")
+                msg = decrypted[20:20+msg_len].decode("utf-8")
+                return make_response(msg, 200)
+            except Exception as e:
+                return make_response(echostr, 200)
+        else:
+            return make_response("signature mismatch", 403)
+    return make_response("success", 200)
 
 @app.route("/health")
 def health():

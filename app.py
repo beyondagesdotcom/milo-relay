@@ -147,7 +147,7 @@ def frameio_auth():
     auth = request.headers.get("Authorization", "")
     if auth != f"Bearer {RELAY_TOKEN}" and request.args.get("token") != RELAY_TOKEN:
         return jsonify({"error": "Unauthorized"}), 401
-    scope = "openid,AdobeID,frame_io.projects,frame_io.assets,frame_io.comments"
+    scope = "openid,AdobeID,frame_io"
     url = (
         f"https://ims-na1.adobelogin.com/ims/authorize/v2"
         f"?client_id={FRAMEIO_CLIENT_ID}"

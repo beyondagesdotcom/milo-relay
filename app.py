@@ -59,12 +59,18 @@ def wecom():
 def slack_events():
     import json
     data = request.get_json(silent=True) or {}
-    # Slack URL verification challenge
     if data.get("type") == "url_verification":
         return jsonify({"challenge": data.get("challenge")})
-    # Log incoming events
     event = data.get("event", {})
-    print(f"[Slack] type={data.get('type')} event={event.get('type')} user={event.get('user')} text={str(event.get('text',''))[:100]}", flush=True)
+    etype = event.get("type", "")
+    user = event.get("user", "")
+    text = event.get("text", "")
+    channel = event.get("channel", "")
+    bot_id = event.get("bot_id", "")
+    if bot_id or user == "U0AHPH9G3UK":
+        return make_response("ok", 200)
+    if etype == "message" and text:
+        print(f"[Slack] #{channel} {user}: {text[:200]}", flush=True)
     return make_response("ok", 200)
 
 @app.route("/frameio", methods=["POST"])

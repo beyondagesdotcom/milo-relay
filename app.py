@@ -55,6 +55,18 @@ def wecom():
             return make_response("signature mismatch", 403)
     return make_response("success", 200)
 
+@app.route("/slack", methods=["POST"])
+def slack_events():
+    import json
+    data = request.get_json(silent=True) or {}
+    # Slack URL verification challenge
+    if data.get("type") == "url_verification":
+        return jsonify({"challenge": data.get("challenge")})
+    # Log incoming events
+    event = data.get("event", {})
+    print(f"[Slack] type={data.get('type')} event={event.get('type')} user={event.get('user')} text={str(event.get('text',''))[:100]}", flush=True)
+    return make_response("ok", 200)
+
 @app.route("/frameio", methods=["POST"])
 def frameio_webhook():
     import json, datetime

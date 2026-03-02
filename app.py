@@ -1,10 +1,49 @@
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify, make_response, redirect
 import requests
 import hashlib
 import base64
+import os
+import json
+import time
 
 app = Flask(__name__)
 RELAY_TOKEN = "RELAY_TOKEN_MK2026"
+
+# Frame.io OAuth2 (Adobe)
+FRAMEIO_CLIENT_ID = "aa28b05fabb141538b89d8d4dae21168"
+FRAMEIO_CLIENT_SECRET = "p8e-qkfniCKr5Af16-sVRj8skhXvDhmXndqC"
+FRAMEIO_REDIRECT_URI = "https://milo-relay.onrender.com/frameio/callback"
+FRAMEIO_TOKEN_FILE = "/tmp/frameio_tokens.json"
+
+def save_frameio_tokens(tokens):
+    with open(FRAMEIO_TOKEN_FILE, "w") as f:
+        json.dump(tokens, f)
+
+def load_frameio_tokens():
+    if os.path.exists(FRAMEIO_TOKEN_FILE):
+        with open(FRAMEIO_TOKEN_FILE) as f:
+            return json.load(f)
+    return {}
+
+def get_frameio_token():
+    tokens = load_frameio_tokens()
+    if not tokens:
+        return None
+    # Refresh if expired
+    if tokens.get("expires_at", 0) < time.time() + 60:
+        resp = requests.post("https://ims-na1.adobelogin.com/ims/token/v3", data={
+            "grant_type": "refresh_token",
+            "client_id": FRAMEIO_CLIENT_ID,
+            "client_secret": FRAMEIO_CLIENT_SECRET,
+            "refresh_token": tokens.get("refresh_token"),
+        })
+        if resp.status_code == 200:
+            new_tokens = resp.json()
+            new_tokens["expires_at"] = time.time() + new_tokens.get("expires_in", 3600)
+            save_frameio_tokens(new_tokens)
+            return new_tokens.get("access_token")
+        return None
+    return tokens.get("access_token")
 WECOM_TOKEN = "XHgrLRTWkt8Dk8Y"
 WECOM_AES_KEY = "n8OiirCsEQ8DqQs9NQ1MnrOV2v7Wk5DO6t1dxD2f9ve"
 
@@ -101,6 +140,64 @@ def frameio_webhook():
     except Exception as e:
         print(f"[Frame.io] parse error: {e}", flush=True)
     return make_response("ok", 200)
+
+@app.route("/frameio/auth")
+def frameio_auth():
+    """Redirect to Adobe OAuth login"""
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {RELAY_TOKEN}" and request.args.get("token") != RELAY_TOKEN:
+        return jsonify({"error": "Unauthorized"}), 401
+    scope = "openid,AdobeID,frame_io.projects,frame_io.assets,frame_io.comments"
+    url = (
+        f"https://ims-na1.adobelogin.com/ims/authorize/v2"
+        f"?client_id={FRAMEIO_CLIENT_ID}"
+        f"&redirect_uri={FRAMEIO_REDIRECT_URI}"
+        f"&scope={scope}"
+        f"&response_type=code"
+    )
+    return redirect(url)
+
+@app.route("/frameio/callback")
+def frameio_callback():
+    """Handle Adobe OAuth callback, exchange code for tokens"""
+    code = request.args.get("code")
+    error = request.args.get("error")
+    if error:
+        return f"OAuth error: {error}", 400
+    if not code:
+        return "No code received", 400
+    resp = requests.post("https://ims-na1.adobelogin.com/ims/token/v3", data={
+        "grant_type": "authorization_code",
+        "client_id": FRAMEIO_CLIENT_ID,
+        "client_secret": FRAMEIO_CLIENT_SECRET,
+        "redirect_uri": FRAMEIO_REDIRECT_URI,
+        "code": code,
+    })
+    if resp.status_code != 200:
+        return f"Token exchange failed: {resp.text}", 400
+    tokens = resp.json()
+    tokens["expires_at"] = time.time() + tokens.get("expires_in", 3600)
+    save_frameio_tokens(tokens)
+    access_token = tokens.get("access_token", "")
+    return f"""
+    <html><body style='font-family:Arial;padding:40px;text-align:center'>
+    <h2 style='color:#28a745'>✅ Frame.io Connected!</h2>
+    <p>Milo now has a valid access token.</p>
+    <p style='font-size:12px;color:#888'>Token saved. You can close this window.</p>
+    </body></html>
+    """
+
+@app.route("/frameio/token", methods=["GET"])
+def frameio_token_status():
+    """Return current token status (for Milo to use)"""
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {RELAY_TOKEN}":
+        return jsonify({"error": "Unauthorized"}), 401
+    token = get_frameio_token()
+    tokens = load_frameio_tokens()
+    if token:
+        return jsonify({"status": "ok", "access_token": token, "expires_at": tokens.get("expires_at")})
+    return jsonify({"status": "no_token", "message": "Need to authenticate via /frameio/auth"})
 
 @app.route("/health")
 def health():

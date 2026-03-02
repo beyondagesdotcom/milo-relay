@@ -55,6 +55,21 @@ def wecom():
             return make_response("signature mismatch", 403)
     return make_response("success", 200)
 
+@app.route("/frameio", methods=["POST"])
+def frameio_webhook():
+    import json, datetime
+    payload = request.get_data()
+    try:
+        data = json.loads(payload)
+        event_type = data.get("type", "unknown")
+        resource = data.get("resource", {})
+        name = resource.get("name", resource.get("id", "?"))
+        ts = datetime.datetime.utcnow().isoformat()
+        print(f"[Frame.io] {ts} | {event_type} | {name}", flush=True)
+    except Exception as e:
+        print(f"[Frame.io] parse error: {e}", flush=True)
+    return make_response("ok", 200)
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})

@@ -55,6 +55,8 @@ def wecom():
             return make_response("signature mismatch", 403)
     return make_response("success", 200)
 
+slack_queue = []
+
 @app.route("/slack", methods=["POST"])
 def slack_events():
     import json
@@ -67,11 +69,23 @@ def slack_events():
     text = event.get("text", "")
     channel = event.get("channel", "")
     bot_id = event.get("bot_id", "")
+    # Ignore Milo's own messages
     if bot_id or user == "U0AHPH9G3UK":
         return make_response("ok", 200)
     if etype == "message" and text:
-        print(f"[Slack] #{channel} {user}: {text[:200]}", flush=True)
+        msg = {"user": user, "channel": channel, "text": text}
+        slack_queue.append(msg)
+        print(f"[Slack] queued: #{channel} {user}: {text[:100]}", flush=True)
     return make_response("ok", 200)
+
+@app.route("/slack/pending", methods=["GET"])
+def slack_pending():
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {RELAY_TOKEN}":
+        return jsonify({"error": "Unauthorized"}), 401
+    msgs = slack_queue.copy()
+    slack_queue.clear()
+    return jsonify({"messages": msgs})
 
 @app.route("/frameio", methods=["POST"])
 def frameio_webhook():

@@ -203,5 +203,33 @@ def frameio_token_status():
 def health():
     return jsonify({"status": "ok"})
 
+# ── Static image hosting for Airtable attachments ─────────────────────
+IMAGES_DIR = "/tmp/mk_images"
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+@app.route("/images/<filename>")
+def serve_image(filename):
+    """Serve hosted images — no auth required (public for Airtable fetching)"""
+    from flask import send_from_directory
+    return send_from_directory(IMAGES_DIR, filename)
+
+@app.route("/images/upload", methods=["POST"])
+def upload_image():
+    """Upload a base64-encoded image for hosting"""
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {RELAY_TOKEN}":
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    filename = data.get("filename")
+    img_b64 = data.get("image")
+    if not filename or not img_b64:
+        return jsonify({"error": "Missing filename or image"}), 400
+    img_bytes = base64.b64decode(img_b64)
+    path = os.path.join(IMAGES_DIR, filename)
+    with open(path, "wb") as f:
+        f.write(img_bytes)
+    url = f"https://milo-relay.onrender.com/images/{filename}"
+    return jsonify({"url": url, "filename": filename})
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)

@@ -239,18 +239,47 @@ import stripe
 import base64 as b64
 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+stripe.api_key = STRIPE_SECRET_KEY
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = "beyondagesdotcom/squeeze-project-form"
 
 # Map Stripe payment link ID → ambassador file path + display name
 AMBASSADOR_MAP = {
-    "3cIbJ08ed1TX7q9fyY24000": {"path": "founders/luke-aria-kerman/index.html",    "name": "Luke & Aria Kerman"},
-    "7sYbJ03XX1TX6m5dqQ24001": {"path": "founders/tessa-forman/index.html",        "name": "Tessa Forman"},
-    "dRm14meCB425aCl1I824002": {"path": "ambassadors/ben-jack-wahnee/index.html",  "name": "Ben & Jack"},
-    "00wcN4fGFfKN39TdqQ24003": {"path": "ambassadors/parker-wellen/index.html",    "name": "Parker Wellen"},
-    "6oU8wO1PPgOR6m59aA24004": {"path": "ambassadors/jordana-brody/index.html",    "name": "Jordana Brody"},
+    "plink_1TEOagBF4XsXJ5LxT1kRdQYq": {"key": "luke",    "name": "Luke & Aria Kerman"},
+    "plink_1TEQ3pBF4XsXJ5Lx6HrLyC9k": {"key": "tessa",   "name": "Tessa Forman"},
+    "plink_1TEQFFBF4XsXJ5LxfOjHijF2": {"key": "ben",     "name": "Ben & Jack"},
+    "plink_1TEejLBF4XsXJ5LxxtmbC1I6": {"key": "parker",  "name": "Parker Wellen"},
+    "plink_1TEfAJBF4XsXJ5Lxev71xJc8": {"key": "jordana", "name": "Jordana Brody"},
 }
+
+def update_donations_json(ambassador_key, amount_cents):
+    """Update /data/donations.json on GitHub with new donation amount."""
+    import urllib.request as ur
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json"
+    }
+    file_path = "data/donations.json"
+    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{file_path}"
+    req = ur.Request(api_url, headers=headers)
+    resp = json.loads(ur.urlopen(req, timeout=10).read().decode())
+    current = json.loads(b64.b64decode(resp["content"]).decode())
+    sha = resp["sha"]
+    current["ambassadors"][ambassador_key]["raised"] += (amount_cents // 100)
+    current["grand_total"] = sum(a["raised"] for a in current["ambassadors"].values())
+    from datetime import datetime
+    current["updated"] = datetime.utcnow().strftime("%Y-%m-%d")
+    new_content = json.dumps(current, indent=2)
+    payload = json.dumps({
+        "message": f"Auto: +${amount_cents//100} to {ambassador_key}",
+        "content": b64.b64encode(new_content.encode()).decode(),
+        "sha": sha
+    }).encode()
+    req = ur.Request(api_url, data=payload, headers=headers, method="PUT")
+    ur.urlopen(req, timeout=10)
+    return current["ambassadors"][ambassador_key]["raised"]
 
 def get_payment_link_id(payment_link_url):
     if not payment_link_url:
@@ -306,16 +335,21 @@ def stripe_webhook():
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        amount = session.get("amount_total", 0)
+        amount_cents = session.get("amount_total", 0)
+        amount = amount_cents / 100
         payment_link = session.get("payment_link", "")
-        link_id = get_payment_link_id(payment_link) if payment_link else None
+        donor_name = (session.get("customer_details") or {}).get("name", "Unknown")
 
-        if link_id and link_id in AMBASSADOR_MAP and GITHUB_TOKEN:
-            ambassador = AMBASSADOR_MAP[link_id]
+        if payment_link and payment_link in AMBASSADOR_MAP and GITHUB_TOKEN:
+            ambassador = AMBASSADOR_MAP[payment_link]
+            key = ambassador["key"]
+            name = ambassador["name"]
             try:
-                new_total = update_progress_on_github(ambassador["path"], amount)
-                print(f"Updated {ambassador['name']} to ${new_total}")
+                new_total = update_donations_json(key, amount_cents)
+                msg = f"💳 New Stripe donation!\n*{donor_name}* gave *${amount:.0f}* to *{name}*\nNew total: *${new_total:,}*"
+                send_telegram(msg)
+                print(f"Updated {name} +${amount} → ${new_total}")
             except Exception as e:
-                print(f"GitHub update failed: {e}")
+                print(f"Update failed: {e}")
 
     return jsonify({"status": "ok"}), 200

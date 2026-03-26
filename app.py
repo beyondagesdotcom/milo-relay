@@ -233,3 +233,89 @@ def upload_image():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
+# ── Stripe Webhook ──────────────────────────────────────────────────────────
+import stripe
+import base64 as b64
+
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO = "beyondagesdotcom/squeeze-project-form"
+
+# Map Stripe payment link ID → ambassador file path + display name
+AMBASSADOR_MAP = {
+    "3cIbJ08ed1TX7q9fyY24000": {"path": "founders/luke-aria-kerman/index.html",    "name": "Luke & Aria Kerman"},
+    "7sYbJ03XX1TX6m5dqQ24001": {"path": "founders/tessa-forman/index.html",        "name": "Tessa Forman"},
+    "dRm14meCB425aCl1I824002": {"path": "ambassadors/ben-jack-wahnee/index.html",  "name": "Ben & Jack"},
+    "00wcN4fGFfKN39TdqQ24003": {"path": "ambassadors/parker-wellen/index.html",    "name": "Parker Wellen"},
+    "6oU8wO1PPgOR6m59aA24004": {"path": "ambassadors/jordana-brody/index.html",    "name": "Jordana Brody"},
+}
+
+def get_payment_link_id(payment_link_url):
+    if not payment_link_url:
+        return None
+    return payment_link_url.rstrip("/").split("/")[-1]
+
+def update_progress_on_github(file_path, amount_cents):
+    import urllib.request as ur
+    import urllib.parse
+
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json"
+    }
+    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{file_path}"
+
+    # Get current file
+    req = ur.Request(api_url, headers=headers)
+    resp = json.loads(ur.urlopen(req, timeout=10).read().decode())
+    current_content = b64.b64decode(resp["content"]).decode("utf-8")
+    sha = resp["sha"]
+
+    # Find current raised amount and add new donation
+    import re
+    match = re.search(r"const raised = (\d+);", current_content)
+    current = int(match.group(1)) if match else 0
+    new_amount = current + (amount_cents // 100)
+    new_content = re.sub(r"const raised = \d+;", f"const raised = {new_amount};", current_content)
+
+    # Push update
+    payload = json.dumps({
+        "message": f"Auto-update: +${amount_cents//100} donation",
+        "content": b64.b64encode(new_content.encode()).decode(),
+        "sha": sha
+    }).encode()
+    req = ur.Request(api_url, data=payload, headers=headers, method="PUT")
+    ur.urlopen(req, timeout=10)
+    return new_amount
+
+@app.route("/stripe-webhook", methods=["POST"])
+def stripe_webhook():
+    payload = request.get_data()
+    sig_header = request.headers.get("Stripe-Signature", "")
+
+    try:
+        if STRIPE_WEBHOOK_SECRET:
+            event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+        else:
+            event = json.loads(payload)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        amount = session.get("amount_total", 0)
+        payment_link = session.get("payment_link", "")
+        link_id = get_payment_link_id(payment_link) if payment_link else None
+
+        if link_id and link_id in AMBASSADOR_MAP and GITHUB_TOKEN:
+            ambassador = AMBASSADOR_MAP[link_id]
+            try:
+                new_total = update_progress_on_github(ambassador["path"], amount)
+                print(f"Updated {ambassador['name']} to ${new_total}")
+            except Exception as e:
+                print(f"GitHub update failed: {e}")
+
+    return jsonify({"status": "ok"}), 200

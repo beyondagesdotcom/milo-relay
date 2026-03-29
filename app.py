@@ -251,6 +251,7 @@ AMBASSADOR_MAP = {
     "plink_1TEQFFBF4XsXJ5LxfOjHijF2": {"key": "ben",     "name": "Ben & Jack"},
     "plink_1TEejLBF4XsXJ5LxxtmbC1I6": {"key": "parker",  "name": "Parker Wellen"},
     "plink_1TEfAJBF4XsXJ5Lxev71xJc8": {"key": "jordana", "name": "Jordana Brody"},
+    "plink_1TFQkGBF4XsXJ5Lxp16z5q0H": {"key": "remi",    "name": "Remy Newman"},
 }
 
 def update_donations_json(ambassador_key, amount_cents):
